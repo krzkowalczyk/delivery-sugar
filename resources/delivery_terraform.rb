@@ -1,6 +1,8 @@
 resource_name :delivery_terraform
 
 property :plan_dir, String, required: true
+property :lock, [TrueClass, FalseClass], required: false, default: false
+property :backend_config, String, required: false
 
 default_action :test
 
@@ -47,14 +49,26 @@ action_class do
     fail "#{msg} plan_dir: #{new_resource.plan_dir}" unless ::File.exist?(
       new_resource.plan_dir
     )
+    return if new_resource.backend_config.nil?
+    fail "#{msg} backend-config: #{new_resource.backend_config}" unless ::File.exist?(
+      new_resource.backend_config
+    )
   end
 
   def cmd(action)
     case action
-    when 'init', 'plan', 'apply'
-      "terraform #{action} -lock=false -input=false -auto-approve #{new_resource.plan_dir}"
+    when 'init'
+      if new_resource.backend_config.nil?
+        "terraform #{action} -lock=#{new_resource.lock} -input=false"
+      else
+        "terraform #{action} -lock=#{new_resource.lock} -input=false -backend-config=#{new_resource.backend_config}"
+      end
+    when 'plan'
+      "terraform #{action} -lock=#{new_resource.lock} -input=false"
+    when 'apply'
+      "terraform #{action} -lock=#{new_resource.lock} -input=false -auto-approve"
     when 'destroy'
-      "terraform #{action} -lock=false -force #{new_resource.plan_dir}"
+      "terraform #{action} -lock=#{new_resource.lock} -force"
     when 'show'
       "terraform #{action}"
     when 'state pull'
@@ -63,7 +77,7 @@ action_class do
   end
 
   def state
-    s = shell_out(cmd('state pull'), cwd: workflow_workspace_repo).stdout
+    s = shell_out(cmd('state pull'), cwd: new_resource.plan_dir).stdout
     s == '' ? {} : JSON.parse(s)
   end
 
@@ -73,9 +87,9 @@ action_class do
   end
 
   def run(action)
-    shell_out!(cmd(action), cwd: workflow_workspace_repo, live_stream: STDOUT)
+    shell_out!(cmd(action), cwd: new_resource.plan_dir, live_stream: STDOUT)
   rescue Mixlib::ShellOut::ShellCommandFailed, Mixlib::ShellOut::CommandTimeout
-    shell_out(cmd('destroy'), cwd: workflow_workspace_repo, live_stream: STDOUT)
+    shell_out(cmd('destroy'), cwd: new_resource.plan_dir, live_stream: STDOUT)
     raise
   ensure
     save_state
